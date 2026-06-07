@@ -113,6 +113,12 @@ _init_lang() {
 
     # 3. Prompt user for language selection
     _select_language
+
+    # Persist language choice immediately (before full save_settings is available)
+    if [ -f "$SETTINGS_FILE" ]; then
+        sed -i '/^MTPROXY_LANG=/d' "$SETTINGS_FILE"
+        echo "MTPROXY_LANG='${MTPROXY_LANG}'" >> "$SETTINGS_FILE"
+    fi
 }
 
 # Temp file tracking
