@@ -104,7 +104,7 @@ _init_lang() {
     # 2. Check saved setting in settings file
     if [ -f "$SETTINGS_FILE" ]; then
         local saved_lang
-        saved_lang=$(grep "^MTPROXY_LANG=" "$SETTINGS_FILE" 2>/dev/null | cut -d= -f2 | tr -d '"')
+        saved_lang=$(grep "^MTPROXY_LANG=" "$SETTINGS_FILE" 2>/dev/null | cut -d= -f2 | tr -d "'" || true)
         if [ -n "$saved_lang" ]; then
             MTPROXY_LANG="$saved_lang"
             _load_lang "$MTPROXY_LANG" && return 0
