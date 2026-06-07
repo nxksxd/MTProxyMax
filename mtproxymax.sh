@@ -37,6 +37,90 @@ if [ "${BASH_VERSINFO[0]:-0}" -lt 4 ]; then
     exit 1
 fi
 
+# ── i18n: Language Support ────────────────────────────────────
+LANG_FILE=""
+MTPROXY_LANG="${MTPROXY_LANG:-}"
+
+# Determine script's own directory for locating lang files
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Load language file
+_load_lang() {
+    local lang="${1:-en}"
+    local lang_path=""
+
+    # Search for lang file in multiple locations
+    for dir in "${_SCRIPT_DIR}/lang" "${INSTALL_DIR}/lang" "/opt/mtproxymax/lang"; do
+        if [ -f "${dir}/${lang}.sh" ]; then
+            lang_path="${dir}/${lang}.sh"
+            break
+        fi
+    done
+
+    if [ -z "$lang_path" ]; then
+        # Fallback: try to source from the same directory as script
+        if [ -f "${_SCRIPT_DIR}/lang/en.sh" ]; then
+            lang_path="${_SCRIPT_DIR}/lang/en.sh"
+        else
+            return 1
+        fi
+    fi
+
+    # shellcheck disable=SC1090
+    source "$lang_path"
+    LANG_FILE="$lang_path"
+    MTPROXY_LANG="$lang"
+}
+
+# Show language selection prompt (called on first run or from settings)
+_select_language() {
+    echo ""
+    echo -e "\033[1;36m  ╔══════════════════════════════════════╗\033[0m"
+    echo -e "\033[1;36m  ║     LANGUAGE / ЯЗЫК                  ║\033[0m"
+    echo -e "\033[1;36m  ╠══════════════════════════════════════╣\033[0m"
+    echo -e "\033[1;36m  ║                                      ║\033[0m"
+    echo -e "\033[1;36m  ║  \033[1;37m[1]\033[0m  English                      \033[1;36m║\033[0m"
+    echo -e "\033[1;36m  ║  \033[1;37m[2]\033[0m  Русский                      \033[1;36m║\033[0m"
+    echo -e "\033[1;36m  ║                                      ║\033[0m"
+    echo -e "\033[1;36m  ╚══════════════════════════════════════╝\033[0m"
+    echo ""
+    echo -en "  Select / Выберите [1/2]: "
+    local lang_choice
+    read -r lang_choice
+    case "$lang_choice" in
+        2) MTPROXY_LANG="ru" ;;
+        *) MTPROXY_LANG="en" ;;
+    esac
+    _load_lang "$MTPROXY_LANG"
+}
+
+# Initialize language: check saved setting, env var, or prompt
+_init_lang() {
+    # 1. Check if already set via environment variable
+    if [ -n "$MTPROXY_LANG" ] && [ "$MTPROXY_LANG" != "" ]; then
+        _load_lang "$MTPROXY_LANG" && return 0
+    fi
+
+    # 2. Check saved setting in settings file
+    if [ -f "$SETTINGS_FILE" ]; then
+        local saved_lang
+        saved_lang=$(grep "^MTPROXY_LANG=" "$SETTINGS_FILE" 2>/dev/null | cut -d= -f2 | tr -d "'" || true)
+        if [ -n "$saved_lang" ]; then
+            MTPROXY_LANG="$saved_lang"
+            _load_lang "$MTPROXY_LANG" && return 0
+        fi
+    fi
+
+    # 3. Prompt user for language selection
+    _select_language
+
+    # Persist language choice immediately (before full save_settings is available)
+    if [ -f "$SETTINGS_FILE" ]; then
+        sed -i '/^MTPROXY_LANG=/d' "$SETTINGS_FILE"
+        echo "MTPROXY_LANG='${MTPROXY_LANG}'" >> "$SETTINGS_FILE"
+    fi
+}
+
 # Temp file tracking
 declare -a _TEMP_FILES=()
 _cleanup() {
@@ -249,13 +333,13 @@ draw_status() {
     local status="$1" label="${2:-}"
     case "$status" in
         running|up|true|enabled|active)
-            echo -e "${BRIGHT_GREEN}${SYM_OK}${NC} ${GREEN}${label:-RUNNING}${NC}" ;;
+            echo -e "${BRIGHT_GREEN}${SYM_OK}${NC} ${GREEN}${label:-${MSG_RUNNING}}${NC}" ;;
         stopped|down|false|disabled|inactive)
-            echo -e "${BRIGHT_RED}${SYM_OK}${NC} ${RED}${label:-STOPPED}${NC}" ;;
+            echo -e "${BRIGHT_RED}${SYM_OK}${NC} ${RED}${label:-${MSG_STOPPED}}${NC}" ;;
         starting|pending|warning)
-            echo -e "${BRIGHT_YELLOW}${SYM_OK}${NC} ${YELLOW}${label:-STARTING}${NC}" ;;
+            echo -e "${BRIGHT_YELLOW}${SYM_OK}${NC} ${YELLOW}${label:-${MSG_STARTING}}${NC}" ;;
         *)
-            echo -e "${DIM}${SYM_OK}${NC} ${DIM}${label:-UNKNOWN}${NC}" ;;
+            echo -e "${DIM}${SYM_OK}${NC} ${DIM}${label:-${MSG_UNKNOWN}}${NC}" ;;
     esac
 }
 
@@ -306,11 +390,11 @@ draw_sparkline() {
 
 # Prompt for menu choice with retro styling
 read_choice() {
-    local prompt="${1:-choice}"
+    local prompt="${1:-${MSG_CHOICE}}"
     local default="${2:-}"
     # Drain any stale input (e.g., leftover escape-sequence bytes)
     read -rn 256 -t 0.05 _ 2>/dev/null || true
-    echo -en "\n  Enter ${prompt,,}" >&2
+    echo -en "\n  ${MSG_ENTER} ${prompt,,}" >&2
     [ -n "$default" ] && echo -en " [${default}]" >&2
     echo -en ": " >&2
     local choice
@@ -333,7 +417,7 @@ typing_effect() {
 # Press any key prompt
 press_any_key() {
     echo ""
-    echo -en "  ${DIM}Press any key to continue...${NC}"
+    echo -en "  ${DIM}${MSG_PRESS_ANY_KEY}${NC}"
     read -rsn1
     # Drain leftover bytes from multi-byte keys (arrow/function keys send escape sequences)
     read -rn 256 -t 0.05 _ 2>/dev/null || true
@@ -359,13 +443,16 @@ show_banner() {
     ██║ ╚═╝ ██║   ██║   ██║     ██║  ██║╚██████╔╝
     ╚═╝     ╚═╝   ╚═╝   ╚═╝     ╚═╝  ╚═╝ ╚═════╝
 BANNER_ART
-    cat << BANNER
-    ╔═════════════════ M A X ══════════════════════╗
-    ║  The Ultimate Telegram Proxy Manager v${VERSION}$(printf '%*s' $((7 - ${#VERSION})) '')║
-    ║             SamNet Technologies              ║
-    ╚══════════════════════════════════════════════╝
-
-BANNER
+    local _subtitle="${MSG_BANNER_SUBTITLE}"
+    local _pad1=$(( (42 - ${#_subtitle} - ${#VERSION} - 3) / 2 ))
+    local _pad2=$(( 42 - ${#_subtitle} - ${#VERSION} - 3 - _pad1 ))
+    [ "$_pad1" -lt 0 ] && _pad1=0
+    [ "$_pad2" -lt 0 ] && _pad2=0
+    echo "    ╔═════════════════ M A X ══════════════════════╗"
+    printf "    ║%*s%s v%s%*s║\n" "$_pad1" "" "$_subtitle" "$VERSION" "$_pad2" ""
+    printf "    ║%*s%s%*s║\n" $(( (46 - ${#MSG_BANNER_AUTHOR}) / 2 )) "" "$MSG_BANNER_AUTHOR" $(( 46 - ${#MSG_BANNER_AUTHOR} - (46 - ${#MSG_BANNER_AUTHOR}) / 2 )) ""
+    echo "    ╚══════════════════════════════════════════════╝"
+    echo ""
     echo -e "${NC}"
 }
 
@@ -499,8 +586,8 @@ is_port_available() {
 # Check if running as root
 check_root() {
     if [ "$(id -u)" -ne 0 ]; then
-        log_error "MTProxyMax must be run as root"
-        echo -e "  ${DIM}Try: sudo $0 $*${NC}"
+        log_error "${MSG_REQUIRES_ROOT}"
+        echo -e "  ${DIM}${MSG_TRY_SUDO} $0 $*${NC}"
         exit 1
     fi
 }
@@ -647,6 +734,9 @@ REPLICATION_SSH_KEY_PATH='${REPLICATION_SSH_KEY_PATH}'
 REPLICATION_EXCLUDE='${REPLICATION_EXCLUDE}'
 REPLICATION_RESTART_ON_CHANGE='${REPLICATION_RESTART_ON_CHANGE}'
 REPLICATION_LOG='${REPLICATION_LOG}'
+
+# Language
+MTPROXY_LANG='${MTPROXY_LANG}'
 SETTINGS_EOF
 
     chmod 600 "$tmp"
@@ -684,7 +774,7 @@ load_settings() {
             AUTO_UPDATE_ENABLED|SECRET_AUTO_ROTATE_DAYS|BACKUP_RETENTION_DAYS|\
             REPLICATION_ENABLED|REPLICATION_ROLE|REPLICATION_SYNC_INTERVAL|\
             REPLICATION_SSH_PORT|REPLICATION_SSH_USER|REPLICATION_DELETE_EXTRA|REPLICATION_SSH_KEY_PATH|REPLICATION_EXCLUDE|\
-            REPLICATION_RESTART_ON_CHANGE|REPLICATION_LOG)
+            REPLICATION_RESTART_ON_CHANGE|REPLICATION_LOG|MTPROXY_LANG)
                 printf -v "$key" '%s' "$val"
                 ;;
         esac
@@ -1963,7 +2053,7 @@ secret_list() {
     fi
 
     echo ""
-    draw_header "SECRETS"
+    draw_header "${MSG_HDR_SECRETS}"
     echo ""
 
     # Batch-load all user stats in one pass (single metrics fetch + single file read)
@@ -2590,7 +2680,7 @@ show_connections() {
     local total=0
     IFS='|' read -r _ total <<< "$(echo "$parsed" | grep '^T|')"
 
-    draw_header "ACTIVE CONNECTIONS"
+    draw_header "${MSG_HDR_CONNECTIONS}"
     echo ""
     echo -e "  ${BOLD}Total active:${NC} ${total:-0}"
     echo ""
@@ -2702,7 +2792,7 @@ secret_stats() {
         ')
     fi
 
-    draw_header "USER STATS"
+    draw_header "${MSG_HDR_USER_STATS}"
     echo ""
     printf "  ${BOLD}%-14s %5s %6s %10s %10s %6s %8s %10s${NC}\n" "LABEL" "CONNS" "IPs" "DOWN" "UP" "QUOTA" "USED" "EXPIRES"
     echo -e "  ${DIM}$(_repeat '─' 80)${NC}"
@@ -2825,7 +2915,7 @@ secret_sort() {
 # Doctor: comprehensive diagnostics
 run_doctor() {
     echo ""
-    draw_header "DOCTOR"
+    draw_header "${MSG_HDR_DOCTOR}"
     echo ""
     local issues=0
 
@@ -3353,7 +3443,7 @@ profile_list() {
     [ -z "$dirs" ] && { log_info "No saved profiles"; return; }
 
     echo ""
-    draw_header "PROFILES"
+    draw_header "${MSG_HDR_PROFILES}"
     echo ""
     while read -r name; do
         [ -z "$name" ] && continue
@@ -3553,7 +3643,7 @@ unban_ip() {
 
 bans_list() {
     echo ""
-    draw_header "BANNED IPs"
+    draw_header "${MSG_HDR_BANLIST}"
     echo ""
     if [ -f "$BANLIST_FILE" ] && [ -s "$BANLIST_FILE" ]; then
         local count=0
@@ -3733,7 +3823,7 @@ backup_restore_encrypted() {
 # ── Comprehensive server info ──
 show_server_info() {
     echo ""
-    draw_header "MTPROXYMAX SERVER INFO"
+    draw_header "${MSG_HDR_SERVER_INFO}"
     echo ""
 
     # System
@@ -3983,7 +4073,7 @@ template_list() {
         return
     fi
     echo ""
-    draw_header "TEMPLATES"
+    draw_header "${MSG_HDR_TEMPLATES}"
     echo ""
     printf "  ${BOLD}%-16s %-8s %-8s %-12s %-14s${NC}\n" "NAME" "CONNS" "IPS" "QUOTA" "EXPIRES"
     echo -e "  ${DIM}$(_repeat '─' 64)${NC}"
@@ -4127,7 +4217,7 @@ _tune_lookup() {
 
 tune_list_params() {
     echo ""
-    draw_header "TUNABLE ENGINE PARAMS"
+    draw_header "${MSG_HDR_TUNABLE}"
     echo ""
     local entry p s v
     for entry in "${_TUNE_WHITELIST[@]}"; do
@@ -4237,7 +4327,7 @@ _emit_tunings_for_section() {
 # ── End-to-end install verification ──
 run_verify() {
     echo ""
-    draw_header "VERIFY"
+    draw_header "${MSG_HDR_VERIFY}"
     echo ""
     local pass=0 fail=0
     _check() {
@@ -4382,7 +4472,7 @@ COMPL
 # ── Outbound throughput test ──
 run_speedtest() {
     echo ""
-    draw_header "SPEED TEST"
+    draw_header "${MSG_HDR_SPEEDTEST}"
     echo ""
     echo -e "  ${DIM}Measuring outbound bandwidth from server...${NC}"
     echo ""
@@ -4613,7 +4703,7 @@ upstream_list() {
     load_upstreams
 
     echo ""
-    draw_header "UPSTREAMS"
+    draw_header "${MSG_HDR_UPSTREAMS}"
     echo ""
     printf "  ${BOLD}%-4s %-18s %-8s %-28s %-8s %-10s${NC}\n" "#" "NAME" "TYPE" "ADDRESS" "WEIGHT" "STATUS"
     echo -e "  ${DIM}$(_repeat '─' 80)${NC}"
@@ -5214,7 +5304,7 @@ build_blocklist_config() {
 show_geoblock_menu() {
     while true; do
         clear_screen
-        draw_header "GEO-BLOCKING"
+        draw_header "${MSG_HDR_GEOBLOCK}"
         echo ""
         echo -e "  ${BOLD}Mode:${NC}      ${GEOBLOCK_MODE}"
         echo -e "  ${BOLD}Countries:${NC} ${BLOCKLIST_COUNTRIES:-${DIM}none${NC}}"
@@ -5312,7 +5402,7 @@ show_geoblock_menu() {
 
 health_check() {
     echo ""
-    draw_header "HEALTH CHECK"
+    draw_header "${MSG_HDR_HEALTH}"
     echo ""
 
     # Docker status
@@ -5720,7 +5810,7 @@ telegram_notify_proxy_started() {
 
 telegram_setup_wizard() {
     clear_screen
-    draw_header "TELEGRAM BOT SETUP"
+    draw_header "${MSG_HDR_TELEGRAM}"
 
     echo ""
     echo -e "  ${BOLD}Step 1: Create a bot${NC}"
@@ -7024,7 +7114,7 @@ replication_setup_wizard() {
         return 1
     fi
     clear_screen
-    draw_header "REPLICATION SETUP"
+    draw_header "${MSG_HDR_REPLICATION}"
     echo ""
     echo -e "  Configures Master-Slave config sync via rsync+SSH."
     echo -e "  Changes on the ${BOLD}Master${NC} auto-push to all Slaves."
@@ -7394,12 +7484,12 @@ run_installer() {
 
     # Check if already installed
     if [ -f "${INSTALL_DIR}/mtproxymax" ]; then
-        echo -e "  ${YELLOW}MTProxyMax is already installed.${NC}"
+        echo -e "  ${YELLOW}${MSG_INSTALL_ALREADY}${NC}"
         echo ""
-        echo -e "  ${DIM}[1]${NC} Open management menu"
-        echo -e "  ${DIM}[2]${NC} Reinstall"
-        echo -e "  ${DIM}[3]${NC} Uninstall"
-        echo -e "  ${DIM}[0]${NC} Exit"
+        echo -e "  ${DIM}[1]${NC} ${MSG_INSTALL_MENU_OPEN}"
+        echo -e "  ${DIM}[2]${NC} ${MSG_INSTALL_MENU_REINSTALL}"
+        echo -e "  ${DIM}[3]${NC} ${MSG_INSTALL_MENU_UNINSTALL}"
+        echo -e "  ${DIM}[0]${NC} ${MSG_EXIT}"
 
         local choice
         choice=$(read_choice "Choice" "1")
@@ -7411,7 +7501,7 @@ run_installer() {
         esac
     fi
 
-    draw_header "INSTALLATION"
+    draw_header "${MSG_HDR_INSTALLATION}"
     echo ""
 
     # Install dependencies
@@ -7422,19 +7512,19 @@ run_installer() {
     wait_for_docker || exit 1
 
     echo ""
-    draw_header "PROXY CONFIGURATION"
+    draw_header "${MSG_HDR_PROXY_CONFIG}"
     echo ""
 
     # Port
-    echo -e "  ${BOLD}Proxy port${NC} ${DIM}(default: 443)${NC}"
-    echo -en "  ${DIM}Enter port [443]:${NC} "
+    echo -e "  ${BOLD}${MSG_INSTALL_PORT_PROMPT}${NC} ${DIM}(${MSG_INSTALL_PORT_DEFAULT})${NC}"
+    echo -en "  ${DIM}${MSG_INSTALL_PORT_ENTER}${NC} "
     local port_input
     read -r port_input
     if [ -n "$port_input" ]; then
         if validate_port "$port_input"; then
             PROXY_PORT="$port_input"
         else
-            log_warn "Invalid port, using default (443)"
+            log_warn "${MSG_INSTALL_PORT_INVALID}"
         fi
     fi
 
@@ -7442,25 +7532,25 @@ run_installer() {
     echo ""
     local _detected_ip
     _detected_ip=$(CUSTOM_IP="" get_public_ip)
-    echo -e "  ${BOLD}Server IP or Domain${NC} ${DIM}(used in proxy links — IP or hostname both work)${NC}"
-    echo -en "  ${DIM}Detected: ${_detected_ip:-unknown} — Enter custom IP/domain or press Enter [${_detected_ip:-auto}]:${NC} "
+    echo -e "  ${BOLD}${MSG_INSTALL_IP_TITLE}${NC} ${DIM}(${MSG_INSTALL_IP_DESC})${NC}"
+    echo -en "  ${DIM}${MSG_INSTALL_IP_DETECTED} ${_detected_ip:-unknown} — ${MSG_INSTALL_IP_ENTER} [${_detected_ip:-auto}]:${NC} "
     local ip_input
     read -r ip_input
     if [ -n "$ip_input" ]; then
         if [[ "$ip_input" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ "$ip_input" =~ ^[0-9a-fA-F:]+$ ]] || [[ "$ip_input" =~ ^[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?$ ]]; then
             CUSTOM_IP="$ip_input"
         else
-            log_warn "Invalid IP/domain, using auto-detected"
+            log_warn "${MSG_INSTALL_IP_INVALID}"
         fi
     fi
 
     # Domain
     echo ""
-    echo -e "  ${BOLD}FakeTLS domain${NC} ${DIM}(your proxy will look like HTTPS to this site)${NC}"
-    echo -e "  ${DIM}[1]${NC} cloudflare.com ${DIM}(recommended)${NC}"
+    echo -e "  ${BOLD}${MSG_INSTALL_DOMAIN_TITLE}${NC} ${DIM}(${MSG_INSTALL_DOMAIN_DESC})${NC}"
+    echo -e "  ${DIM}[1]${NC} cloudflare.com ${DIM}(${MSG_INSTALL_DOMAIN_RECOMMENDED})${NC}"
     echo -e "  ${DIM}[2]${NC} www.google.com"
     echo -e "  ${DIM}[3]${NC} www.microsoft.com"
-    echo -e "  ${DIM}[4]${NC} Custom domain"
+    echo -e "  ${DIM}[4]${NC} ${MSG_INSTALL_DOMAIN_CUSTOM}"
 
     local domain_choice
     domain_choice=$(read_choice "Choice" "1")
@@ -7468,13 +7558,13 @@ run_installer() {
         2) PROXY_DOMAIN="www.google.com" ;;
         3) PROXY_DOMAIN="www.microsoft.com" ;;
         4)
-            echo -en "  ${DIM}Enter domain:${NC} "
+            echo -en "  ${DIM}${MSG_INSTALL_DOMAIN_ENTER}${NC} "
             local custom_domain
             read -r custom_domain
             if [ -n "$custom_domain" ] && validate_domain "$custom_domain"; then
                 PROXY_DOMAIN="$custom_domain"
             elif [ -n "$custom_domain" ]; then
-                log_error "Invalid domain format"
+                log_error "${MSG_INSTALL_DOMAIN_INVALID}"
             fi
             ;;
         *) PROXY_DOMAIN="cloudflare.com" ;;
@@ -7482,8 +7572,8 @@ run_installer() {
 
     # Traffic masking
     echo ""
-    echo -e "  ${BOLD}Traffic masking${NC} ${DIM}(forward DPI probes to real website)${NC}"
-    echo -en "  ${DIM}Enable? [Y/n]:${NC} "
+    echo -e "  ${BOLD}${MSG_INSTALL_MASK_TITLE}${NC} ${DIM}(${MSG_INSTALL_MASK_DESC})${NC}"
+    echo -en "  ${DIM}${MSG_INSTALL_MASK_ENABLE}${NC} "
     local mask_input
     read -r mask_input
     case "$mask_input" in
@@ -7493,10 +7583,10 @@ run_installer() {
 
     # Ad-tag
     echo ""
-    echo -e "  ${BOLD}Ad-tag${NC} ${DIM}(optional)${NC}"
-    echo -e "  ${DIM}Telegram can pin a sponsored channel at the top of your users'${NC}"
-    echo -e "  ${DIM}chat list when they connect through your proxy. To get an ad-tag,${NC}"
-    echo -e "  ${DIM}message @MTProxyBot on Telegram. Most private proxies skip this.${NC}"
+    echo -e "  ${BOLD}${MSG_INSTALL_ADTAG_TITLE}${NC} ${DIM}(${MSG_INSTALL_ADTAG_OPTIONAL})${NC}"
+    echo -e "  ${DIM}${MSG_INSTALL_ADTAG_DESC1}${NC}"
+    echo -e "  ${DIM}${MSG_INSTALL_ADTAG_DESC2}${NC}"
+    echo -e "  ${DIM}${MSG_INSTALL_ADTAG_DESC3}${NC}"
     echo -en "  ${DIM}Enable ad-tag? [y/N]:${NC} "
     local adtag_choice
     read -r adtag_choice
@@ -7547,7 +7637,7 @@ run_installer() {
 
     # First secret
     echo ""
-    draw_header "PROXY SECRET"
+    draw_header "${MSG_HDR_PROXY_SECRET}"
     echo ""
     echo -e "  ${DIM}A secret key will be auto-generated for your proxy.${NC}"
     echo -e "  ${DIM}Users need this key to connect. Give it a name to identify it.${NC}"
@@ -7585,12 +7675,20 @@ run_installer() {
         chmod +x "${INSTALL_DIR}/mtproxymax"
     fi
 
+    # Copy language files
+    local _src_dir
+    _src_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    mkdir -p "${INSTALL_DIR}/lang"
+    for _lf in "${_src_dir}/lang/"*.sh; do
+        [ -f "$_lf" ] && cp "$_lf" "${INSTALL_DIR}/lang/"
+    done
+
     # Create symlink
     ln -sf "${INSTALL_DIR}/mtproxymax" /usr/local/bin/mtproxymax
 
     # Start proxy
     echo ""
-    draw_header "STARTING PROXY"
+    draw_header "${MSG_HDR_STARTING_PROXY}"
     echo ""
     run_proxy_container || {
         log_error "Failed to start proxy"
@@ -7916,7 +8014,7 @@ instance_remove() {
 
 instance_list() {
     echo ""
-    draw_header "PROXY INSTANCES"
+    draw_header "${MSG_HDR_INSTANCES}"
     echo ""
     echo -e "  ${BOLD}Primary:${NC} port ${PROXY_PORT} (container: ${CONTAINER_NAME})"
     local running; is_proxy_running && running="${GREEN}running${NC}" || running="${RED}stopped${NC}"
@@ -8013,7 +8111,7 @@ list_backups() {
         return
     fi
     echo ""
-    draw_header "BACKUPS"
+    draw_header "${MSG_HDR_BACKUPS}"
     echo ""
     echo "$files" | while read -r f; do
         local size; size=$(du -h "$f" 2>/dev/null | awk '{print $1}')
@@ -8313,7 +8411,7 @@ show_metrics() {
     local me_rate_disp
     [ "${me_att:-0}" -gt 0 ] && me_rate_disp="${me_rate}%" || me_rate_disp="—"
 
-    draw_header "METRICS"
+    draw_header "${MSG_HDR_METRICS}"
     echo -e "  ${DIM}uptime:${NC} $(format_duration "${uptime:-0}")   ${DIM}upstream:${NC} ${up_status}   ${DIM}active:${NC} ${c_cur:-0}   ${DIM}writers:${NC} ${me_wa:-0}/${me_ww:-0}"
     echo ""
 
@@ -9135,7 +9233,7 @@ cli_main() {
             load_settings
             load_secrets
             echo ""
-            draw_header "TRAFFIC"
+            draw_header "${MSG_HDR_TRAFFIC}"
             local t_in t_out conns
             read -r t_in t_out conns <<< "$(get_cumulative_proxy_stats)"
             # Batch-load all user stats
@@ -9571,7 +9669,7 @@ cli_main() {
 show_security_menu() {
     while true; do
         clear_screen
-        draw_header "SECURITY & ROUTING"
+        draw_header "${MSG_HDR_SECURITY}"
         echo ""
         local sni_label
         if [ "$UNKNOWN_SNI_ACTION" = "drop" ]; then
@@ -9638,7 +9736,7 @@ show_security_menu() {
 show_upstream_menu() {
     while true; do
         clear_screen
-        draw_header "PROXY CHAINING"
+        draw_header "${MSG_HDR_UPSTREAM}"
 
         load_upstreams
         upstream_list
@@ -9760,38 +9858,38 @@ show_main_menu() {
             [ "${SECRETS_ENABLED[$i]}" = "true" ] && active=$((active+1)) || disabled=$((disabled+1))
         done
 
-        draw_box_line "  ${BOLD}Engine:${NC} telemt v${_cached_telemt_ver}  ${BOLD}Status:${NC} ${status_str}" "$w"
-        draw_box_line "  ${BOLD}Port:${NC}   ${PROXY_PORT}            ${BOLD}Uptime:${NC} ${uptime_str}" "$w"
-        draw_box_line "  ${BOLD}Domain:${NC} ${PROXY_DOMAIN}" "$w"
-        draw_box_line "  ${BOLD}Traffic:${NC} ${SYM_DOWN} $(format_bytes "$traffic_in")  ${SYM_UP} $(format_bytes "$traffic_out")  ${BOLD}Conns:${NC} ${connections}" "$w"
-        draw_box_line "  ${BOLD}Secrets:${NC} ${active} active / ${disabled} disabled" "$w"
+        draw_box_line "  ${BOLD}${MSG_ENGINE}:${NC} telemt v${_cached_telemt_ver}  ${BOLD}${MSG_STATUS}:${NC} ${status_str}" "$w"
+        draw_box_line "  ${BOLD}${MSG_PORT}:${NC}   ${PROXY_PORT}            ${BOLD}${MSG_UPTIME}:${NC} ${uptime_str}" "$w"
+        draw_box_line "  ${BOLD}${MSG_DOMAIN}:${NC} ${PROXY_DOMAIN}" "$w"
+        draw_box_line "  ${BOLD}${MSG_TRAFFIC}:${NC} ${SYM_DOWN} $(format_bytes "$traffic_in")  ${SYM_UP} $(format_bytes "$traffic_out")  ${BOLD}${MSG_CONNECTIONS}:${NC} ${connections}" "$w"
+        draw_box_line "  ${BOLD}${MSG_SECRETS}:${NC} ${active} ${MSG_ACTIVE} / ${disabled} ${MSG_DISABLED}" "$w"
 
         draw_box_sep "$w"
         if [ -f "$_UPDATE_BADGE" ]; then
-            draw_box_line "  ${YELLOW}${BOLD}⬆  Update available — select [9] to update${NC}" "$w"
+            draw_box_line "  ${YELLOW}${BOLD}⬆  ${MSG_MENU_UPDATE_AVAILABLE}${NC}" "$w"
             draw_box_sep "$w"
         fi
         draw_box_empty "$w"
-        draw_box_line "  ${BRIGHT_CYAN}[1]${NC}  Proxy Management" "$w"
-        draw_box_line "  ${BRIGHT_CYAN}[2]${NC}  Secret Management" "$w"
-        draw_box_line "  ${BRIGHT_CYAN}[3]${NC}  Share Links & QR" "$w"
-        draw_box_line "  ${BRIGHT_CYAN}[4]${NC}  Telegram Bot" "$w"
-        draw_box_line "  ${BRIGHT_CYAN}[5]${NC}  Security & Routing" "$w"
-        draw_box_line "  ${BRIGHT_CYAN}[6]${NC}  Settings" "$w"
-        draw_box_line "  ${BRIGHT_CYAN}[7]${NC}  Logs & Traffic" "$w"
-        draw_box_line "  ${BRIGHT_CYAN}[8]${NC}  Info & Help" "$w"
-        draw_box_line "  ${BRIGHT_CYAN}[9]${NC}  About & Update" "$w"
-        draw_box_line "  ${BRIGHT_CYAN}[r]${NC}  Replication" "$w"
+        draw_box_line "  ${BRIGHT_CYAN}[1]${NC}  ${MSG_MENU_PROXY_MGMT}" "$w"
+        draw_box_line "  ${BRIGHT_CYAN}[2]${NC}  ${MSG_MENU_SECRET_MGMT}" "$w"
+        draw_box_line "  ${BRIGHT_CYAN}[3]${NC}  ${MSG_MENU_SHARE_LINKS}" "$w"
+        draw_box_line "  ${BRIGHT_CYAN}[4]${NC}  ${MSG_MENU_TELEGRAM_BOT}" "$w"
+        draw_box_line "  ${BRIGHT_CYAN}[5]${NC}  ${MSG_MENU_SECURITY}" "$w"
+        draw_box_line "  ${BRIGHT_CYAN}[6]${NC}  ${MSG_MENU_SETTINGS}" "$w"
+        draw_box_line "  ${BRIGHT_CYAN}[7]${NC}  ${MSG_MENU_LOGS}" "$w"
+        draw_box_line "  ${BRIGHT_CYAN}[8]${NC}  ${MSG_MENU_INFO}" "$w"
+        draw_box_line "  ${BRIGHT_CYAN}[9]${NC}  ${MSG_MENU_ABOUT}" "$w"
+        draw_box_line "  ${BRIGHT_CYAN}[r]${NC}  ${MSG_MENU_REPLICATION}" "$w"
         draw_box_empty "$w"
-        draw_box_line "  ${BRIGHT_RED}[u]${NC}  Uninstall" "$w"
-        draw_box_line "  ${BRIGHT_CYAN}[0]${NC}  Exit" "$w"
+        draw_box_line "  ${BRIGHT_RED}[u]${NC}  ${MSG_MENU_UNINSTALL}" "$w"
+        draw_box_line "  ${BRIGHT_CYAN}[0]${NC}  ${MSG_EXIT}" "$w"
         draw_box_empty "$w"
         draw_box_sep "$w"
-        draw_box_center "${DIM}mtproxymax v${VERSION} | SamNet Technologies${NC}" "$w"
+        draw_box_center "${DIM}mtproxymax v${VERSION} | ${MSG_BANNER_AUTHOR}${NC}" "$w"
         draw_box_bottom "$w"
 
         local choice
-        choice=$(read_choice "Choice" "0")
+        choice=$(read_choice "${MSG_CHOICE}" "0")
 
         case "$choice" in
             1) show_proxy_menu ;;
@@ -9814,20 +9912,20 @@ show_main_menu() {
 show_proxy_menu() {
     while true; do
         clear_screen
-        draw_header "PROXY MANAGEMENT"
+        draw_header "${MSG_HDR_PROXY_MGMT}"
         echo ""
         local _pstatus
         docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${CONTAINER_NAME}$" && _pstatus="running" || _pstatus="stopped"
-        echo -e "  Status: $(draw_status "$_pstatus")"
+        echo -e "  ${MSG_STATUS}: $(draw_status "$_pstatus")"
         echo ""
-        echo -e "  ${DIM}[1]${NC} Start proxy"
-        echo -e "  ${DIM}[2]${NC} Stop proxy"
-        echo -e "  ${DIM}[3]${NC} Restart proxy"
-        echo -e "  ${DIM}[4]${NC} View logs"
-        echo -e "  ${DIM}[5]${NC} Health check"
+        echo -e "  ${DIM}[1]${NC} ${MSG_PROXY_START}"
+        echo -e "  ${DIM}[2]${NC} ${MSG_PROXY_STOP}"
+        echo -e "  ${DIM}[3]${NC} ${MSG_PROXY_RESTART}"
+        echo -e "  ${DIM}[4]${NC} ${MSG_PROXY_LOGS}"
+        echo -e "  ${DIM}[5]${NC} ${MSG_PROXY_HEALTH}"
         maintenance_status
-        echo -e "  ${DIM}[m]${NC} Toggle maintenance mode"
-        echo -e "  ${DIM}[0]${NC} Back"
+        echo -e "  ${DIM}[m]${NC} ${MSG_PROXY_MAINTENANCE}"
+        echo -e "  ${DIM}[0]${NC} ${MSG_BACK}"
 
         local choice
         choice=$(read_choice "Choice" "0")
@@ -9854,50 +9952,50 @@ show_proxy_menu() {
 show_secrets_menu() {
     while true; do
         clear_screen
-        draw_header "SECRET MANAGEMENT"
+        draw_header "${MSG_HDR_SECRET_MGMT}"
 
         secret_list
 
-        echo -e "  ${DIM}[1]${NC} Add new secret"
-        echo -e "  ${DIM}[2]${NC} Remove a secret"
-        echo -e "  ${DIM}[3]${NC} Rotate a secret"
-        echo -e "  ${DIM}[4]${NC} Enable/disable a secret"
-        echo -e "  ${DIM}[5]${NC} Set user limits"
-        echo -e "  ${DIM}[6]${NC} Batch add secrets"
-        echo -e "  ${DIM}[7]${NC} Batch remove secrets"
-        echo -e "  ${DIM}[8]${NC} Edit note/description"
-        echo -e "  ${DIM}[9]${NC} Rename a secret"
-        echo -e "  ${DIM}[c]${NC} Clone a secret"
-        echo -e "  ${DIM}[x]${NC} Extend a secret's expiry"
-        echo -e "  ${DIM}[e]${NC} Bulk-extend all expiry dates"
-        echo -e "  ${DIM}[d]${NC} Disable expired secrets"
-        echo -e "  ${DIM}[s]${NC} User stats overview"
-        echo -e "  ${DIM}[t]${NC} Sort secrets"
-        echo -e "  ${DIM}[i]${NC} Export / Import"
-        echo -e "  ${DIM}[f]${NC} Full secret info"
-        echo -e "  ${DIM}[/]${NC} Search secrets"
-        echo -e "  ${DIM}[p]${NC} Top users"
-        echo -e "  ${DIM}[g]${NC} Generate links file"
-        echo -e "  ${DIM}[a]${NC} Archive / Unarchive"
-        echo -e "  ${DIM}[y]${NC} Tag / Untag / Filter by tag"
-        echo -e "  ${DIM}[l]${NC} View user activity log"
-        echo -e "  ${DIM}[q]${NC} Monthly quota reset"
-        echo -e "  ${DIM}[R]${NC} Rotate ALL secrets"
-        echo -e "  ${DIM}[k]${NC} Templates (save / apply / list / delete)"
-        echo -e "  ${DIM}[0]${NC} Back"
+        echo -e "  ${DIM}[1]${NC} ${MSG_SECRET_ADD}"
+        echo -e "  ${DIM}[2]${NC} ${MSG_SECRET_REMOVE}"
+        echo -e "  ${DIM}[3]${NC} ${MSG_SECRET_ROTATE}"
+        echo -e "  ${DIM}[4]${NC} ${MSG_SECRET_TOGGLE}"
+        echo -e "  ${DIM}[5]${NC} ${MSG_SECRET_LIMITS}"
+        echo -e "  ${DIM}[6]${NC} ${MSG_SECRET_BATCH_ADD}"
+        echo -e "  ${DIM}[7]${NC} ${MSG_SECRET_BATCH_REMOVE}"
+        echo -e "  ${DIM}[8]${NC} ${MSG_SECRET_EDIT_NOTE}"
+        echo -e "  ${DIM}[9]${NC} ${MSG_SECRET_RENAME}"
+        echo -e "  ${DIM}[c]${NC} ${MSG_SECRET_CLONE}"
+        echo -e "  ${DIM}[x]${NC} ${MSG_SECRET_EXTEND}"
+        echo -e "  ${DIM}[e]${NC} ${MSG_SECRET_BULK_EXTEND}"
+        echo -e "  ${DIM}[d]${NC} ${MSG_SECRET_DISABLE_EXPIRED}"
+        echo -e "  ${DIM}[s]${NC} ${MSG_SECRET_STATS}"
+        echo -e "  ${DIM}[t]${NC} ${MSG_SECRET_SORT}"
+        echo -e "  ${DIM}[i]${NC} ${MSG_SECRET_EXPORT_IMPORT}"
+        echo -e "  ${DIM}[f]${NC} ${MSG_SECRET_FULL_INFO}"
+        echo -e "  ${DIM}[/]${NC} ${MSG_SECRET_SEARCH}"
+        echo -e "  ${DIM}[p]${NC} ${MSG_SECRET_TOP}"
+        echo -e "  ${DIM}[g]${NC} ${MSG_SECRET_GEN_LINKS}"
+        echo -e "  ${DIM}[a]${NC} ${MSG_SECRET_ARCHIVE}"
+        echo -e "  ${DIM}[y]${NC} ${MSG_SECRET_TAGS}"
+        echo -e "  ${DIM}[l]${NC} ${MSG_SECRET_ACTIVITY_LOG}"
+        echo -e "  ${DIM}[q]${NC} ${MSG_SECRET_QUOTA_RESET}"
+        echo -e "  ${DIM}[R]${NC} ${MSG_SECRET_ROTATE_ALL}"
+        echo -e "  ${DIM}[k]${NC} ${MSG_SECRET_TEMPLATES}"
+        echo -e "  ${DIM}[0]${NC} ${MSG_BACK}"
 
         local choice
         choice=$(read_choice "Choice" "0")
         case "$choice" in
             1)
-                echo -en "  ${BOLD}Label:${NC} "
+                echo -en "  ${BOLD}${MSG_SECRET_LABEL}:${NC} "
                 local label
                 read -r label
                 [ -n "$label" ] && { secret_add "$label" || true; }
                 press_any_key
                 ;;
             2)
-                echo -en "  ${BOLD}Label or # to remove:${NC} "
+                echo -en "  ${BOLD}${MSG_SECRET_LABEL_TO_REMOVE}:${NC} "
                 local label
                 read -r label
                 if [[ "$label" =~ ^[0-9]+$ ]] && [ "$label" -ge 1 ] && [ "$label" -le "${#SECRETS_LABELS[@]}" ]; then
@@ -9907,7 +10005,7 @@ show_secrets_menu() {
                 press_any_key
                 ;;
             3)
-                echo -en "  ${BOLD}Label or # to rotate:${NC} "
+                echo -en "  ${BOLD}${MSG_SECRET_LABEL_TO_ROTATE}:${NC} "
                 local label
                 read -r label
                 if [[ "$label" =~ ^[0-9]+$ ]] && [ "$label" -ge 1 ] && [ "$label" -le "${#SECRETS_LABELS[@]}" ]; then
@@ -9917,7 +10015,7 @@ show_secrets_menu() {
                 press_any_key
                 ;;
             4)
-                echo -en "  ${BOLD}Label or # to toggle:${NC} "
+                echo -en "  ${BOLD}${MSG_SECRET_LABEL_TO_TOGGLE}:${NC} "
                 local label
                 read -r label
                 if [[ "$label" =~ ^[0-9]+$ ]] && [ "$label" -ge 1 ] && [ "$label" -le "${#SECRETS_LABELS[@]}" ]; then
@@ -9929,7 +10027,7 @@ show_secrets_menu() {
             5)
                 secret_show_limits
                 echo ""
-                echo -en "  ${BOLD}Label or # to set limits:${NC} "
+                echo -en "  ${BOLD}${MSG_SECRET_LABEL_TO_SET}:${NC} "
                 local label
                 read -r label
                 # If user entered a number, map to the label at that index
@@ -9937,21 +10035,21 @@ show_secrets_menu() {
                     label="${SECRETS_LABELS[$((label - 1))]}"
                 fi
                 if [ -n "$label" ]; then
-                    echo -en "  ${BOLD}Max TCP connections (0=unlimited):${NC} "
+                    echo -en "  ${BOLD}${MSG_SECRET_MAX_CONNS}:${NC} "
                     local mc; read -r mc
-                    echo -en "  ${BOLD}Max unique IPs (0=unlimited):${NC} "
+                    echo -en "  ${BOLD}${MSG_SECRET_MAX_IPS}:${NC} "
                     local mi; read -r mi
-                    echo -en "  ${BOLD}Data quota (e.g. 5G, 500M, 0=unlimited):${NC} "
+                    echo -en "  ${BOLD}${MSG_SECRET_DATA_QUOTA}:${NC} "
                     local dq; read -r dq
-                    echo -en "  ${BOLD}Expiry date (YYYY-MM-DD, 0=never):${NC} "
+                    echo -en "  ${BOLD}${MSG_SECRET_EXPIRY}:${NC} "
                     local ex; read -r ex
                     secret_set_limits "$label" "${mc:-0}" "${mi:-0}" "${dq:-0}" "${ex:-0}" || true
                 fi
                 press_any_key
                 ;;
             6)
-                echo -e "  ${DIM}Enter labels separated by spaces${NC}"
-                echo -en "  ${BOLD}Labels:${NC} "
+                echo -e "  ${DIM}${MSG_SECRET_LABELS_SPACES}${NC}"
+                echo -en "  ${BOLD}${MSG_SECRET_LABELS}:${NC} "
                 local batch_labels
                 read -r batch_labels
                 if [ -n "$batch_labels" ]; then
@@ -9961,8 +10059,8 @@ show_secrets_menu() {
                 press_any_key
                 ;;
             7)
-                echo -e "  ${DIM}Enter labels separated by spaces${NC}"
-                echo -en "  ${BOLD}Labels to remove:${NC} "
+                echo -e "  ${DIM}${MSG_SECRET_LABELS_SPACES}${NC}"
+                echo -en "  ${BOLD}${MSG_SECRET_LABELS_REMOVE}:${NC} "
                 local batch_labels
                 read -r batch_labels
                 if [ -n "$batch_labels" ]; then
@@ -9972,7 +10070,7 @@ show_secrets_menu() {
                 press_any_key
                 ;;
             8)
-                echo -en "  ${BOLD}Label or #:${NC} "
+                echo -en "  ${BOLD}${MSG_SECRET_LABEL_OR_NUM}:${NC} "
                 local note_label
                 read -r note_label
                 if [[ "$note_label" =~ ^[0-9]+$ ]] && [ "$note_label" -ge 1 ] && [ "$note_label" -le "${#SECRETS_LABELS[@]}" ]; then
@@ -9984,46 +10082,46 @@ show_secrets_menu() {
                 press_any_key
                 ;;
             9)
-                echo -en "  ${BOLD}Label or # to rename:${NC} "
+                echo -en "  ${BOLD}${MSG_SECRET_LABEL_TO_RENAME}:${NC} "
                 local old_label
                 read -r old_label
                 if [[ "$old_label" =~ ^[0-9]+$ ]] && [ "$old_label" -ge 1 ] && [ "$old_label" -le "${#SECRETS_LABELS[@]}" ]; then
                     old_label="${SECRETS_LABELS[$((old_label - 1))]}"
                 fi
                 if [ -n "$old_label" ]; then
-                    echo -en "  ${BOLD}New label:${NC} "
+                    echo -en "  ${BOLD}${MSG_SECRET_NEW_LABEL}:${NC} "
                     local new_label; read -r new_label
                     [ -n "$new_label" ] && { secret_rename "$old_label" "$new_label" || true; }
                 fi
                 press_any_key
                 ;;
             c|C)
-                echo -en "  ${BOLD}Source label or #:${NC} "
+                echo -en "  ${BOLD}${MSG_SECRET_SOURCE_LABEL}:${NC} "
                 local src_label; read -r src_label
                 if [[ "$src_label" =~ ^[0-9]+$ ]] && [ "$src_label" -ge 1 ] && [ "$src_label" -le "${#SECRETS_LABELS[@]}" ]; then
                     src_label="${SECRETS_LABELS[$((src_label - 1))]}"
                 fi
                 if [ -n "$src_label" ]; then
-                    echo -en "  ${BOLD}New label:${NC} "
+                    echo -en "  ${BOLD}${MSG_SECRET_NEW_LABEL}:${NC} "
                     local clone_label; read -r clone_label
                     [ -n "$clone_label" ] && { secret_clone "$src_label" "$clone_label" || true; }
                 fi
                 press_any_key
                 ;;
             e|E)
-                echo -en "  ${BOLD}Extend all by how many days?${NC} "
+                echo -en "  ${BOLD}${MSG_SECRET_EXTEND_DAYS}${NC} "
                 local ext_days; read -r ext_days
                 [ -n "$ext_days" ] && { secret_bulk_extend "$ext_days" || true; }
                 press_any_key
                 ;;
             x|X)
-                echo -en "  ${BOLD}Label or #:${NC} "
+                echo -en "  ${BOLD}${MSG_SECRET_LABEL_OR_NUM}:${NC} "
                 local ext_label; read -r ext_label
                 if [[ "$ext_label" =~ ^[0-9]+$ ]] && [ "$ext_label" -ge 1 ] && [ "$ext_label" -le "${#SECRETS_LABELS[@]}" ]; then
                     ext_label="${SECRETS_LABELS[$((ext_label - 1))]}"
                 fi
                 if [ -n "$ext_label" ]; then
-                    echo -en "  ${BOLD}Extend by how many days?${NC} "
+                    echo -en "  ${BOLD}${MSG_SECRET_EXTEND_BY}${NC} "
                     local ext_d; read -r ext_d
                     [ -n "$ext_d" ] && { secret_extend "$ext_label" "$ext_d" || true; }
                 fi
@@ -10032,7 +10130,7 @@ show_secrets_menu() {
             d|D) secret_disable_expired; press_any_key ;;
             s|S) secret_stats; press_any_key ;;
             t|T)
-                echo -e "  ${DIM}[1] By traffic  [2] By connections  [3] By date  [4] By name${NC}"
+                echo -e "  ${DIM}${MSG_SECRET_SORT_OPTIONS}${NC}"
                 local sort_choice; sort_choice=$(read_choice "Choice" "1")
                 case "$sort_choice" in
                     1) secret_sort traffic ;;
@@ -10230,7 +10328,7 @@ show_secrets_menu() {
 
 show_links_menu() {
     clear_screen
-    draw_header "SHARE LINKS & QR"
+    draw_header "${MSG_HDR_SHARE_LINKS}"
 
     local server_ip
     server_ip=$(get_public_ip)
@@ -10274,7 +10372,7 @@ show_links_menu() {
 show_telegram_menu() {
     while true; do
         clear_screen
-        draw_header "TELEGRAM BOT"
+        draw_header "${MSG_HDR_TELEGRAM}"
         echo ""
         if [ "$TELEGRAM_ENABLED" = "true" ]; then
             echo -e "  Status: $(draw_status running 'Enabled')"
@@ -10371,7 +10469,7 @@ show_telegram_menu() {
 show_settings_menu() {
     while true; do
         clear_screen
-        draw_header "SETTINGS"
+        draw_header "${MSG_HDR_SETTINGS}"
         echo ""
         echo -e "  ${BOLD}Port:${NC}        ${PROXY_PORT}"
         echo -e "  ${BOLD}IP:${NC}          ${CUSTOM_IP:-$(get_public_ip) ${DIM}(auto)${NC}}"
@@ -10401,11 +10499,16 @@ show_settings_menu() {
         echo -e "  ${DIM}[u]${NC} Custom Telegram URLs (restricted regions)"
         echo -e "  ${DIM}[A]${NC} Auto-rotate policy (current: ${SECRET_AUTO_ROTATE_DAYS:-0}d)"
         echo -e "  ${DIM}[n]${NC} Engine tuning (advanced)"
-        echo -e "  ${DIM}[0]${NC} Back"
+        echo -e "  ${DIM}[L]${NC} ${MSG_SETTINGS_LANGUAGE} (${MTPROXY_LANG})"
+        echo -e "  ${DIM}[0]${NC} ${MSG_BACK}"
 
         local choice
-        choice=$(read_choice "Choice" "0")
+        choice=$(read_choice "${MSG_CHOICE}" "0")
         case "$choice" in
+            L)
+                _select_language
+                save_settings
+                ;;
             1)
                 echo -en "  ${BOLD}New port:${NC} "
                 local p; read -r p
@@ -10782,7 +10885,7 @@ show_settings_menu() {
 show_engine_menu() {
     while true; do
         clear_screen
-        draw_header "ENGINE MANAGEMENT"
+        draw_header "${MSG_HDR_ENGINE}"
         echo ""
         echo -e "  ${BOLD}Engine:${NC}    telemt v$(get_telemt_version)"
         echo -e "  ${BOLD}Pinned to:${NC} commit ${TELEMT_COMMIT}"
@@ -10825,7 +10928,7 @@ show_engine_menu() {
 
 show_traffic_menu() {
     clear_screen
-    draw_header "LOGS & TRAFFIC"
+    draw_header "${MSG_HDR_TRAFFIC}"
 
     if ! is_proxy_running; then
         echo ""
@@ -10901,7 +11004,7 @@ show_traffic_menu() {
 
 show_info_faketls() {
     clear_screen
-    draw_header "FAKETLS OBFUSCATION"
+    draw_header "${MSG_HDR_INFO_FAKETLS}"
     echo ""
     echo -e "  ${BOLD}What is FakeTLS?${NC}"
     echo -e "  FakeTLS makes your proxy traffic look identical to normal"
@@ -10936,7 +11039,7 @@ show_info_faketls() {
 
 show_info_masking() {
     clear_screen
-    draw_header "TRAFFIC MASKING"
+    draw_header "${MSG_HDR_INFO_MASKING}"
     echo ""
     echo -e "  ${BOLD}What is Traffic Masking?${NC}"
     echo -e "  When enabled, your server responds to non-proxy connections"
@@ -11096,7 +11199,7 @@ show_info_qrcode() {
 
 show_info_geoblock() {
     clear_screen
-    draw_header "GEO-BLOCKING"
+    draw_header "${MSG_HDR_GEOBLOCK}"
     echo ""
     echo -e "  ${BOLD}What is Geo-Blocking?${NC}"
     echo -e "  Block connections from specific countries using IP-based"
@@ -11256,7 +11359,7 @@ show_info_userlimits() {
 
 show_info_proxychaining() {
     clear_screen
-    draw_header "PROXY CHAINING"
+    draw_header "${MSG_HDR_UPSTREAM}"
     echo ""
     echo -e "  ${BOLD}${YELLOW}Route Traffic Through Intermediate Proxies${NC}"
     echo ""
@@ -11814,6 +11917,7 @@ show_replication_menu() {
 # ── Section 19: Main Entry Point ─────────────────────────────
 
 main() {
+    _init_lang
     cli_main "$@"
 }
 
